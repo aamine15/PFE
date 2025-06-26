@@ -1,0 +1,105 @@
+version: '3.9'
+
+services:
+  waf-simulator:
+    build:
+      context: ./simulateur_waf
+    container_name: PFE_sim_waf
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BROKER=kafka:9092
+      - KAFKA_TOPIC=waf-logs
+    networks:
+      - waf-network
+  db:
+    image: postgres
+    container_name: PFE_db
+    restart: always
+    ports:
+      - "5432:5432" 
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: waf
+    volumes:
+      - ./init-db:/docker-entrypoint-initdb.d
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - waf-network
+
+  fastapi:
+    build: .
+    container_name: PFE_api
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"   # expose uniquement FastAPI sur le host
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=waf
+      - DB_USER=user
+      - DB_PASSWORD=password
+    volumes:
+      - .:/app
+    networks:
+      - waf-network
+
+
+  spark:
+    image: bitnami/spark:latest
+    container_name: PFE_spark
+    environment:
+    - HOME=/tmp
+    ports:
+      - "4040:4040"
+    volumes:
+    - ./spark_jobs:/opt/spark-apps
+    - ./spark_jars:/opt/spark-apps/jars
+    - ./spark_conf/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+    - ./logs:/opt/spark/logs
+    networks:
+    - waf-network
+    command: >
+      spark-submit
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.13:3.5.0 
+      --jars /opt/spark-apps/jars/postgresql-42.7.7.jar
+      /opt/spark-apps/job.py
+
+  zookeeper:
+    image: bitnami/zookeeper:latest
+    container_name: PFE_kafka_zookeeper
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    ports:
+      - "2181:2181"
+    networks:
+      - waf-network
+
+  kafka:
+    image: bitnami/kafka:latest
+    container_name: PFE_kafka_broker
+    environment:
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+    networks:
+      - waf-network
+networks:
+  waf-network:
+
+volumes:
+  postgres_data:
+
+
